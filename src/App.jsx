@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import './App.css';
@@ -12,14 +12,6 @@ const API_BASE_URL = 'https://med-translator-backend.onrender.com/api/translate'
 const JobCard = ({ job, onDelete }) => {
   const [isCopied, setIsCopied] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
-  const logsEndRef = useRef(null);
-
-  // Tự động cuộn terminal của riêng job này
-  useEffect(() => {
-    if (job.status === 'processing') {
-      logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [job.logs]);
 
   const handleCopy = async () => {
     if (!job.result) return;
@@ -75,26 +67,6 @@ const JobCard = ({ job, onDelete }) => {
         <div className="job-error">Chi tiết lỗi: {job.error}</div>
       )}
 
-      {/* HIỂN THỊ TERMINAL LOG */}
-      {job.status === 'processing' && (
-        <div className="terminal-container mini-terminal">
-          <div className="terminal-header">
-            <div className="mac-dots">
-              <span>●</span><span>●</span><span>●</span>
-            </div>
-            <span className="terminal-title">System Logs (Live)</span>
-          </div>
-          <div className="terminal-body">
-            {job.logs?.map((log, index) => (
-              <div key={index} className="log-line">
-                <span className="log-time">[{new Date().toLocaleTimeString()}]</span> {log}
-              </div>
-            ))}
-            <div ref={logsEndRef} />
-          </div>
-        </div>
-      )}
-
       {/* HIỂN THỊ KẾT QUẢ MARKDOWN */}
       {job.status === 'completed' && showPreview && job.result && (
         <div className="markdown-preview mt-15">
@@ -111,11 +83,12 @@ const JobCard = ({ job, onDelete }) => {
 function App() {
   const [selectedFiles, setSelectedFiles] = useState(null);
   const [folderName, setFolderName] = useState(''); 
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(null); 
-  const [jobs, setJobs] = useState([]); 
   
-  // [THÊM MỚI] State lưu trạng thái Ngủ đông của Backend
+  // KHAI BÁO STATE CHO LOCAL QUEUE
+  const [localQueue, setLocalQueue] = useState([]); // Array chứa các thư mục chờ đẩy lên
+  const [isProcessingQueue, setIsProcessingQueue] = useState(false); // Cờ khóa luồng
+  
+  const [jobs, setJobs] = useState([]); 
   const [sysStatus, setSysStatus] = useState({ isHibernating: false, stats: null });
 
   // 1. Phục hồi trạng thái khi F5 (Bao gồm cả trạng thái Hệ thống và Jobs)
@@ -171,15 +144,103 @@ function App() {
           job.jobId === data.jobId ? { ...job, status: data.status, error: data.error } : job
         ));
       } 
-      else if (data.type === 'log') {
-        setJobs(prevJobs => prevJobs.map(job => 
-          job.jobId === data.jobId ? { ...job, logs: [...(job.logs || []), data.msg] } : job
-        ));
-      }
     };
 
     return () => eventSource.close();
   }, []); 
+
+  // BACKGROUND WORKER (Tự động chạy ngầm tải lên tuần tự)
+  useEffect(() => {
+    const processQueue = async () => {
+      // Bỏ qua nếu đang xử lý 1 task khác hoặc hàng đợi không có pending task
+      if (isProcessingQueue) return;
+      const nextTask = localQueue.find(task => task.status === 'pending');
+      if (!nextTask) return;
+
+      setIsProcessingQueue(true); // Khóa luồng
+
+      // Cập nhật trạng thái UI là đang chạy
+      setLocalQueue(prev => prev.map(t => 
+        t.id === nextTask.id ? { ...t, status: 'uploading', progressMsg: '🚀 Bắt đầu nạp dữ liệu...' } : t
+      ));
+
+      const CHUNK_SIZE = 2; // Tối ưu chunk size
+      const filesArray = nextTask.files;
+      const totalFiles = filesArray.length;
+      let uploadedCount = 0;
+
+      try {
+        for (let i = 0; i < totalFiles; i += CHUNK_SIZE) {
+          const chunk = filesArray.slice(i, i + CHUNK_SIZE);
+          const formData = new FormData();
+          
+          formData.append('folderName', nextTask.folderName);
+          chunk.forEach(file => formData.append('files', file));
+
+          const response = await axios.post(`${API_BASE_URL}`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            onUploadProgress: (progressEvent) => {
+              const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+              setLocalQueue(prev => prev.map(t => 
+                t.id === nextTask.id ? { ...t, progressMsg: `Đang đẩy Lô ${Math.floor(i/CHUNK_SIZE) + 1}: ${percentCompleted}% (${uploadedCount}/${totalFiles})` } : t
+              ));
+            }
+          });
+
+          uploadedCount += chunk.length;
+          setLocalQueue(prev => prev.map(t => 
+            t.id === nextTask.id ? { ...t, progressMsg: `Đang đồng bộ DB: ${Math.min(uploadedCount, totalFiles)}/${totalFiles} files...` } : t
+          ));
+
+          const newJobs = response.data.jobs.map(j => ({ ...j, logs: [], result: null }));
+          setJobs(prevJobs => {
+            const existingIds = new Set(prevJobs.map(j => j.jobId));
+            const uniqueNewJobs = newJobs.filter(j => !existingIds.has(j.jobId));
+            return [...uniqueNewJobs, ...prevJobs]; 
+          });
+        }
+        
+        // Hoàn tất task
+        setLocalQueue(prev => prev.map(t => 
+          t.id === nextTask.id ? { ...t, status: 'completed', progressMsg: '✅ Đã đẩy lên Cloud' } : t
+        ));
+
+      } catch (error) {
+        setLocalQueue(prev => prev.map(t => 
+          t.id === nextTask.id ? { ...t, status: 'error', progressMsg: '❌ Lỗi Timeout / Mạng' } : t
+        ));
+      } finally {
+        setIsProcessingQueue(false); // Mở khóa luồng cho task tiếp theo
+      }
+    };
+
+    processQueue();
+  }, [localQueue, isProcessingQueue]);
+
+  // HÀM MỚI: Thêm thao tác của người dùng vào Local Queue
+  const handleAddToQueue = () => {
+    if (!selectedFiles || selectedFiles.length === 0) return;
+
+    const newTask = {
+      id: Date.now(), // Unique ID cho mỗi task tải lên
+      folderName: folderName.trim() || 'Mặc định',
+      files: Array.from(selectedFiles),
+      status: 'pending', // pending, uploading, completed, error
+      progressMsg: '⏳ Đang xếp hàng chờ tải lên...'
+    };
+
+    setLocalQueue(prev => [...prev, newTask]);
+    
+    // Reset Form Input ngay lập tức để người dùng có thể chọn tiếp
+    document.getElementById('fileInput').value = '';
+    setSelectedFiles(null);
+    setFolderName('');
+  };
+
+  // NÚT XÓA TASK KHỎI HÀNG CHỜ KHI CHƯA CHẠY
+  const handleRemoveFromQueue = (taskId) => {
+    setLocalQueue(prev => prev.filter(task => task.id !== taskId));
+  };
 
   const handleDeleteJob = async (jobId) => {
     const isConfirm = window.confirm('Bạn có chắc chắn muốn xóa tiến trình này không?');
@@ -219,62 +280,6 @@ function App() {
 
   const handleFileChange = (e) => {
     setSelectedFiles(e.target.files); 
-  };
-
-  const handleUpload = async () => {
-    if (!selectedFiles || selectedFiles.length === 0) return;
-
-    const filesArray = Array.from(selectedFiles);
-    const totalFiles = filesArray.length;
-    
-    // TỐI ƯU KIẾN TRÚC: Hạ Chunk Size xuống 2 để giảm Payload (Tối đa ~60MB/Request)
-    // Ngăn chặn Cloud Load Balancer Timeout và giảm tải Disk I/O cho Multer
-    const CHUNK_SIZE = 2; 
-    const targetFolder = folderName.trim() || 'Mặc định';
-
-    setIsUploading(true);
-
-    try {
-      let uploadedCount = 0; // Biến theo dõi số lượng file đã nạp lên DB thành công
-
-      for (let i = 0; i < totalFiles; i += CHUNK_SIZE) {
-        const chunk = filesArray.slice(i, i + CHUNK_SIZE);
-        const formData = new FormData();
-        
-        formData.append('folderName', targetFolder);
-        chunk.forEach(file => formData.append('files', file));
-
-        // NÂNG CẤP UX: Sử dụng Axios onUploadProgress để track Network I/O
-        const response = await axios.post(`${API_BASE_URL}`, formData, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-          onUploadProgress: (progressEvent) => {
-            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-            setUploadProgress(`Đang đẩy Data (Lô ${Math.floor(i/CHUNK_SIZE) + 1}): ${percentCompleted}% - Đã nạp: ${uploadedCount}/${totalFiles} files`);
-          }
-        });
-
-        // Cập nhật lại số lượng sau khi request HTTP 200 OK
-        uploadedCount += chunk.length;
-        setUploadProgress(`Đang đồng bộ Queue: ${Math.min(uploadedCount, totalFiles)}/${totalFiles} files...`);
-
-        const newJobs = response.data.jobs.map(j => ({ ...j, logs: [], result: null }));
-        
-        setJobs(prevJobs => {
-          const existingIds = new Set(prevJobs.map(j => j.jobId));
-          const uniqueNewJobs = newJobs.filter(j => !existingIds.has(j.jobId));
-          return [...uniqueNewJobs, ...prevJobs]; 
-        });
-      }
-
-      document.getElementById('fileInput').value = '';
-      setSelectedFiles(null);
-      setFolderName('');
-    } catch (error) {
-      alert('Lỗi tải file: Payload quá lớn dẫn đến Timeout hoặc kết nối mạng không ổn định. Vui lòng kiểm tra lại log Cloud.');
-    } finally {
-      setIsUploading(false);
-      setUploadProgress(null);
-    }
   };
 
   const sanitizeFileName = (name) => {
@@ -372,14 +377,34 @@ function App() {
           </div>
           
           <button 
-            onClick={handleUpload} 
-            disabled={!selectedFiles || selectedFiles.length === 0 || isUploading}
+            onClick={handleAddToQueue} 
+            disabled={!selectedFiles || selectedFiles.length === 0}
             className="upload-btn"
           >
-            {isUploading 
-              ? `⏳ ${uploadProgress}` 
-              : `🚀 Nạp ${selectedFiles ? selectedFiles.length : 0} file vào hàng đợi`}
+            ➕ Thêm {selectedFiles ? selectedFiles.length : 0} file vào Local Queue
           </button>
+
+          {/* HIỂN THỊ DANH SÁCH LOCAL QUEUE */}
+          {localQueue.length > 0 && (
+            <div style={{ marginTop: '10px', background: '#f8f9fa', border: '1px solid #dee2e6', borderRadius: '6px', padding: '10px' }}>
+              <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#495057' }}>Hàng chờ thiết bị ({localQueue.filter(t => t.status !== 'completed').length} đang đợi)</h4>
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {localQueue.map(task => (
+                  <li key={task.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', background: '#fff', padding: '8px', border: '1px solid #eee', borderRadius: '4px' }}>
+                    <div>
+                      <strong>📁 {task.folderName}</strong> ({task.files.length} files) 
+                      <span style={{ marginLeft: '10px', color: task.status === 'error' ? 'red' : task.status === 'completed' ? 'green' : '#007bff' }}>
+                        {task.progressMsg}
+                      </span>
+                    </div>
+                    {task.status === 'pending' && (
+                      <button onClick={() => handleRemoveFromQueue(task.id)} style={{ background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold' }}>✕ Xóa</button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
 
         <div className="jobs-container">
