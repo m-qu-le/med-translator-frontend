@@ -226,12 +226,17 @@ function App() {
 
     const filesArray = Array.from(selectedFiles);
     const totalFiles = filesArray.length;
-    const CHUNK_SIZE = 10; 
+    
+    // TỐI ƯU KIẾN TRÚC: Hạ Chunk Size xuống 2 để giảm Payload (Tối đa ~60MB/Request)
+    // Ngăn chặn Cloud Load Balancer Timeout và giảm tải Disk I/O cho Multer
+    const CHUNK_SIZE = 2; 
     const targetFolder = folderName.trim() || 'Mặc định';
 
     setIsUploading(true);
 
     try {
+      let uploadedCount = 0; // Biến theo dõi số lượng file đã nạp lên DB thành công
+
       for (let i = 0; i < totalFiles; i += CHUNK_SIZE) {
         const chunk = filesArray.slice(i, i + CHUNK_SIZE);
         const formData = new FormData();
@@ -239,11 +244,18 @@ function App() {
         formData.append('folderName', targetFolder);
         chunk.forEach(file => formData.append('files', file));
 
-        setUploadProgress(`Đang nạp lên Server: ${Math.min(i + CHUNK_SIZE, totalFiles)}/${totalFiles} files...`);
-
+        // NÂNG CẤP UX: Sử dụng Axios onUploadProgress để track Network I/O
         const response = await axios.post(`${API_BASE_URL}`, formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
+          onUploadProgress: (progressEvent) => {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            setUploadProgress(`Đang đẩy Data (Lô ${Math.floor(i/CHUNK_SIZE) + 1}): ${percentCompleted}% - Đã nạp: ${uploadedCount}/${totalFiles} files`);
+          }
         });
+
+        // Cập nhật lại số lượng sau khi request HTTP 200 OK
+        uploadedCount += chunk.length;
+        setUploadProgress(`Đang đồng bộ Queue: ${Math.min(uploadedCount, totalFiles)}/${totalFiles} files...`);
 
         const newJobs = response.data.jobs.map(j => ({ ...j, logs: [], result: null }));
         
@@ -258,7 +270,7 @@ function App() {
       setSelectedFiles(null);
       setFolderName('');
     } catch (error) {
-      alert('Lỗi tải file: Cụm file này quá lớn hoặc mạng không ổn định.');
+      alert('Lỗi tải file: Payload quá lớn dẫn đến Timeout hoặc kết nối mạng không ổn định. Vui lòng kiểm tra lại log Cloud.');
     } finally {
       setIsUploading(false);
       setUploadProgress(null);
