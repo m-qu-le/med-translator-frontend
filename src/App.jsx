@@ -9,7 +9,7 @@ const API_BASE_URL = 'https://med-translator-backend.onrender.com/api/translate'
 // -------------------------------------------------------------
 // COMPONENT CON: JOB CARD (Quản lý hiển thị cho từng file)
 // -------------------------------------------------------------
-const JobCard = ({ job }) => {
+const JobCard = ({ job, onDelete }) => { // Thêm prop onDelete
   const [isCopied, setIsCopied] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const logsEndRef = useRef(null);
@@ -45,16 +45,29 @@ const JobCard = ({ job }) => {
           </span>
         </div>
 
-        {job.status === 'completed' && (
-          <div className="job-actions">
-            <button className="preview-btn" onClick={() => setShowPreview(!showPreview)}>
-              {showPreview ? 'Đóng xem trước' : '👁️ Xem trước'}
+        <div className="job-actions">
+          {job.status === 'completed' && (
+            <>
+              <button className="preview-btn" onClick={() => setShowPreview(!showPreview)}>
+                {showPreview ? 'Đóng xem trước' : '👁️ Xem trước'}
+              </button>
+              <button onClick={handleCopy} className={`copy-btn ${isCopied ? 'copied' : ''}`}>
+                {isCopied ? '✅ Đã Copy' : '📋 Copy Markdown'}
+              </button>
+            </>
+          )}
+          
+          {/* Nút Xóa xuất hiện ở cả job lỗi và job đã hoàn thành */}
+          {(job.status === 'failed' || job.status === 'completed') && (
+            <button 
+              onClick={() => onDelete(job.jobId)} 
+              className="delete-btn" 
+              style={{ backgroundColor: '#dc3545', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', marginLeft: '8px', fontSize: '0.9em' }}
+            >
+              🗑️ Xóa
             </button>
-            <button onClick={handleCopy} className={`copy-btn ${isCopied ? 'copied' : ''}`}>
-              {isCopied ? '✅ Đã Copy' : '📋 Copy Markdown'}
-            </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* HIỂN THỊ LỖI */}
@@ -158,6 +171,20 @@ function App() {
 
     return () => eventSource.close();
   }, []); 
+
+  // Xóa một tiến trình khỏi Database và giao diện
+  const handleDeleteJob = async (jobId) => {
+    const isConfirm = window.confirm('Bạn có chắc chắn muốn xóa tiến trình này không? Hành động này không thể hoàn tác.');
+    if (!isConfirm) return;
+
+    try {
+      await axios.delete(`${API_BASE_URL}/jobs/${jobId}`);
+      // Lọc bỏ job đã xóa khỏi state hiện tại để UI tự cập nhật lập tức
+      setJobs(prevJobs => prevJobs.filter(job => job.jobId !== jobId));
+    } catch (error) {
+      alert('Lỗi khi xóa tiến trình: ' + (error.response?.data?.error || error.message));
+    }
+  };
 
   // Xử lý chọn file với giới hạn tối đa 100 file
   const handleFileChange = (e) => {
@@ -325,7 +352,7 @@ function App() {
           
           <div className="masonry-grid-fallback">
             {jobs.map(job => (
-              <JobCard key={job.jobId} job={job} />
+              <JobCard key={job.jobId} job={job} onDelete={handleDeleteJob} />
             ))}
           </div>
 
