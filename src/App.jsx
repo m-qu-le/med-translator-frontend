@@ -9,7 +9,7 @@ const API_BASE_URL = 'https://med-translator-backend.onrender.com/api/translate'
 // -------------------------------------------------------------
 // COMPONENT CON: JOB CARD (Quản lý hiển thị cho từng file)
 // -------------------------------------------------------------
-const JobCard = ({ job, onDelete }) => { // Thêm prop onDelete
+const JobCard = ({ job, onDelete }) => {
   const [isCopied, setIsCopied] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const logsEndRef = useRef(null);
@@ -110,7 +110,9 @@ const JobCard = ({ job, onDelete }) => { // Thêm prop onDelete
 // -------------------------------------------------------------
 function App() {
   const [selectedFiles, setSelectedFiles] = useState(null);
+  const [folderName, setFolderName] = useState(''); // [THÊM MỚI] State lưu tên thư mục
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(null); // [THÊM MỚI] Hiển thị tiến độ tải lên
   const [jobs, setJobs] = useState([]); 
 
   // 1. Phục hồi trạng thái khi F5
@@ -172,195 +174,183 @@ function App() {
     return () => eventSource.close();
   }, []); 
 
-  // Xóa một tiến trình khỏi Database và giao diện
   const handleDeleteJob = async (jobId) => {
-    const isConfirm = window.confirm('Bạn có chắc chắn muốn xóa tiến trình này không? Hành động này không thể hoàn tác.');
+    const isConfirm = window.confirm('Bạn có chắc chắn muốn xóa tiến trình này không?');
     if (!isConfirm) return;
 
     try {
       await axios.delete(`${API_BASE_URL}/jobs/${jobId}`);
-      // Lọc bỏ job đã xóa khỏi state hiện tại để UI tự cập nhật lập tức
       setJobs(prevJobs => prevJobs.filter(job => job.jobId !== jobId));
     } catch (error) {
       alert('Lỗi khi xóa tiến trình: ' + (error.response?.data?.error || error.message));
     }
   };
 
-  // Xử lý chọn file với giới hạn tối đa 100 file
   const handleFileChange = (e) => {
-    const files = e.target.files;
-    
-    if (files.length > 100) {
-      alert('⚠️ Giới hạn tối đa là 100 file cho mỗi lần nạp vào hàng đợi. Vui lòng chọn lại.');
-      e.target.value = ''; // Reset input file trên giao diện
-      setSelectedFiles(null);
-      return;
-    }
-
-    setSelectedFiles(files);
+    setSelectedFiles(e.target.files); // Không giới hạn 100 file nữa
   };
 
-  // Ném file lên Server
+  // [THUẬT TOÁN MỚI] Gửi file theo Batch (Chia nhỏ để chống treo Server)
   const handleUpload = async () => {
     if (!selectedFiles || selectedFiles.length === 0) return;
 
-    const formData = new FormData();
-    for (let i = 0; i < selectedFiles.length; i++) {
-      formData.append('files', selectedFiles[i]);
-    }
+    const filesArray = Array.from(selectedFiles);
+    const totalFiles = filesArray.length;
+    const CHUNK_SIZE = 10; // Gửi tối đa 10 file một lần
+    const targetFolder = folderName.trim() || 'Mặc định';
 
     setIsUploading(true);
 
     try {
-      const response = await axios.post(`${API_BASE_URL}`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+      for (let i = 0; i < totalFiles; i += CHUNK_SIZE) {
+        const chunk = filesArray.slice(i, i + CHUNK_SIZE);
+        const formData = new FormData();
+        
+        formData.append('folderName', targetFolder);
+        chunk.forEach(file => formData.append('files', file));
 
-      const newJobs = response.data.jobs.map(j => ({ ...j, logs: [], result: null }));
-      
-      setJobs(prevJobs => {
-        const existingIds = new Set(prevJobs.map(j => j.jobId));
-        const uniqueNewJobs = newJobs.filter(j => !existingIds.has(j.jobId));
-        return [...uniqueNewJobs, ...prevJobs]; 
-      });
+        setUploadProgress(`Đang nạp lên Server: ${Math.min(i + CHUNK_SIZE, totalFiles)}/${totalFiles} files...`);
+
+        const response = await axios.post(`${API_BASE_URL}`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+
+        const newJobs = response.data.jobs.map(j => ({ ...j, logs: [], result: null }));
+        
+        setJobs(prevJobs => {
+          const existingIds = new Set(prevJobs.map(j => j.jobId));
+          const uniqueNewJobs = newJobs.filter(j => !existingIds.has(j.jobId));
+          return [...uniqueNewJobs, ...prevJobs]; 
+        });
+      }
 
       document.getElementById('fileInput').value = '';
       setSelectedFiles(null);
+      setFolderName('');
     } catch (error) {
-      alert('Lỗi tải file: ' + (error.response?.data?.error || error.message));
+      alert('Lỗi tải file: Cụm file này quá lớn hoặc mạng không ổn định.');
     } finally {
       setIsUploading(false);
+      setUploadProgress(null);
     }
   };
 
-  // Hàm làm sạch tên file để tránh lỗi "Name is not allowed" của OS
   const sanitizeFileName = (name) => {
-    return name
-      // Xóa các ký tự cấm trên Windows/macOS/Linux
-      .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
-      // Thay thế khoảng trắng và các ký tự đặc biệt khác bằng dấu gạch dưới (tuỳ chọn, để tên file gọn hơn)
-      .replace(/[\s\t\n]+/g, '_') 
-      // Xóa dấu chấm ở đầu/cuối file
-      .replace(/^\.+|\.+$/g, ''); 
+    return name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').replace(/[\s\t\n]+/g, '_').replace(/^\.+|\.+$/g, ''); 
   };
 
-  // Lấy tất cả file đã dịch xong và ghi trực tiếp vào 1 thư mục do user chọn
-  const handleDownloadAll = async () => {
-    const completedJobs = jobs.filter(job => job.status === 'completed' && job.result);
+  // [SỬA ĐỔI] Chỉ tải xuống các file hoàn thành TRONG THƯ MỤC được chọn
+  const handleDownloadFolder = async (targetFolderName, folderJobs) => {
+    const completedJobs = folderJobs.filter(job => job.status === 'completed' && job.result);
 
     if (completedJobs.length === 0) {
-      alert('Chưa có tài liệu nào hoàn thành để tải xuống!');
+      alert('Thư mục này chưa có tài liệu nào hoàn thành!');
       return;
     }
 
     if (!('showDirectoryPicker' in window)) {
-      alert('⚠️ Trình duyệt của bạn không hỗ trợ File System Access API (Khuyên dùng Chrome/Edge).\nVui lòng tắt chế độ "Hỏi vị trí lưu file" trong cài đặt trình duyệt để dùng tính năng tải hàng loạt gốc.');
+      alert('⚠️ Trình duyệt của bạn không hỗ trợ File System Access API.');
       return;
     }
 
     try {
-      // 1. Kích hoạt hộp thoại của OS yêu cầu người dùng chọn 1 thư mục duy nhất
-      const directoryHandle = await window.showDirectoryPicker({
-        mode: 'readwrite' 
-      });
-
+      const directoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
       let successCount = 0;
 
-      // 2. Lặp qua danh sách file đã dịch và ghi thẳng vào thư mục vừa chọn
       for (const [index, job] of completedJobs.entries()) {
         try {
-          // Lấy tên gốc hoặc tạo tên tạm nếu không có
           let rawName = job.originalName || job.fileName || `TaiLieu_${index + 1}`;
-          
-          // Cắt bỏ phần mở rộng cũ (ví dụ .pdf)
           const baseName = rawName.replace(/\.[^/.]+$/, "");
-          
-          // Dọn dẹp tên file để loại bỏ ký tự cấm
           const cleanName = sanitizeFileName(baseName);
-          
-          // Nối thêm đuôi _vi.md
           const finalFileName = `${cleanName || `Doc_${index}`}_vi.md`;
 
-          // Tạo file handle
           const fileHandle = await directoryHandle.getFileHandle(finalFileName, { create: true });
-          
-          // Khởi tạo luồng ghi
           const writable = await fileHandle.createWritable();
-          
-          // Ghi nội dung Markdown
           await writable.write(job.result);
-          
-          // Đóng luồng
           await writable.close();
           successCount++;
-
         } catch (fileError) {
           console.error(`Lỗi khi ghi file ${job.originalName}:`, fileError);
-          // Không dừng toàn bộ tiến trình nếu 1 file lỗi, cứ tiếp tục với file sau
         }
       }
-
-      alert(`✅ Đã lưu thành công ${successCount}/${completedJobs.length} tài liệu vào thư mục bạn chọn!`);
-
+      alert(`✅ Đã lưu ${successCount}/${completedJobs.length} tài liệu của thư mục [${targetFolderName}]!`);
     } catch (error) {
-      if (error.name !== 'AbortError') {
-        console.error('❌ Lỗi System I/O khi mở thư mục:', error);
-        alert('Lỗi khi mở thư mục lưu: ' + error.message);
-      }
+      if (error.name !== 'AbortError') console.error('❌ Lỗi System I/O:', error);
     }
   };  
+
+  // [THÊM MỚI] Thuật toán nhóm các Job lại theo tên Thư mục
+  const groupedJobs = jobs.reduce((acc, job) => {
+    const folder = job.folderName || 'Mặc định';
+    if (!acc[folder]) acc[folder] = [];
+    acc[folder].push(job);
+    return acc;
+  }, {});
 
   return (
     <div className="app-container">
       <header className="header">
         <h1>🩺 StudyMed Translator</h1>
-        <p>Hệ thống tự động dịch sách và tài liệu Y khoa</p>
+        <p>Hệ thống tự động dịch sách và tài liệu Y khoa (Multi-Batch Mode)</p>
       </header>
 
       <main className="main-content">
-        <div className="upload-section">
-          <input 
-            id="fileInput"
-            type="file" 
-            accept="application/pdf" 
-            multiple 
-            onChange={handleFileChange} 
-            className="file-input"
-          />
+        <div className="upload-section" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <input 
+              type="text" 
+              placeholder="Tên thư mục (Vd: Module Nội tiết)" 
+              value={folderName}
+              onChange={(e) => setFolderName(e.target.value)}
+              style={{ padding: '10px', borderRadius: '5px', border: '1px solid #ccc', flex: 1 }}
+            />
+            <input 
+              id="fileInput"
+              type="file" 
+              accept="application/pdf" 
+              multiple 
+              onChange={handleFileChange} 
+              className="file-input"
+              style={{ flex: 2 }}
+            />
+          </div>
+          
           <button 
             onClick={handleUpload} 
             disabled={!selectedFiles || selectedFiles.length === 0 || isUploading}
             className="upload-btn"
           >
             {isUploading 
-              ? '⏳ Đang nạp Queue...' 
-              : `🚀 Thêm ${selectedFiles ? selectedFiles.length : ''} file vào hàng đợi`}
+              ? `⏳ ${uploadProgress}` 
+              : `🚀 Nạp ${selectedFiles ? selectedFiles.length : 0} file vào hàng đợi`}
           </button>
         </div>
 
         <div className="jobs-container">
-          {jobs.length > 0 && (
-            <div className="queue-header-actions">
-              <h3 className="queue-title">Tiến trình làm việc ({jobs.length} files)</h3>
-              {jobs.some(j => j.status === 'completed' && j.result) && (
-                <button onClick={handleDownloadAll} className="download-all-btn">
-                  📥 Tải tất cả Markdown
-                </button>
-              )}
+          {Object.entries(groupedJobs).map(([folderName, folderJobs]) => (
+            <div key={folderName} className="folder-group" style={{ marginBottom: '40px', border: '1px solid #e0e0e0', borderRadius: '8px', padding: '15px', background: '#fcfcfc' }}>
+              <div className="queue-header-actions" style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '2px solid #007bff', paddingBottom: '10px', marginBottom: '20px' }}>
+                <h3 className="queue-title" style={{ color: '#007bff', margin: 0 }}>
+                  📁 Thư mục: {folderName} ({folderJobs.length} files)
+                </h3>
+                {folderJobs.some(j => j.status === 'completed' && j.result) && (
+                  <button onClick={() => handleDownloadFolder(folderName, folderJobs)} className="download-all-btn" style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '5px', cursor: 'pointer' }}>
+                    📥 Tải các file đã xong
+                  </button>
+                )}
+              </div>
+              
+              <div className="masonry-grid-fallback">
+                {folderJobs.map(job => (
+                  <JobCard key={job.jobId} job={job} onDelete={handleDeleteJob} />
+                ))}
+              </div>
             </div>
-          )}
-          
-          <div className="masonry-grid-fallback">
-            {jobs.map(job => (
-              <JobCard key={job.jobId} job={job} onDelete={handleDeleteJob} />
-            ))}
-          </div>
+          ))}
 
           {jobs.length === 0 && (
             <div className="empty-state">
-              <div className="empty-wash">
-                Chưa có tài liệu nào trong hàng đợi.
-              </div>
+              <div className="empty-wash">Chưa có tài liệu nào trong hệ thống.</div>
             </div>
           )}
         </div>
