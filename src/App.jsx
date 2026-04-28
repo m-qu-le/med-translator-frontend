@@ -217,6 +217,22 @@ function App() {
     }
   };
 
+  const handleForceWakeUp = async () => {
+    const isConfirm = window.confirm('⚡ Bạn có chắc chắn muốn ép hệ thống thức dậy và tiếp tục dịch ngay lập tức không?');
+    if (!isConfirm) return;
+
+    try {
+      // Gọi API ép thức dậy đã tạo ở Backend
+      const response = await axios.post(`${API_BASE_URL}/force-wakeup`);
+      alert('✅ ' + response.data.message);
+      
+      // Lưu ý: Chúng ta không cần tự setSysStatus(false) ở đây
+      // Vì Backend sẽ tự động bắn SSE event 'systemStatusChanged' về và App sẽ tự cập nhật.
+    } catch (error) {
+      alert('❌ Lỗi khi ép thức dậy: ' + (error.response?.data?.error || error.message));
+    }
+  };
+
   const handleFileChange = (e) => {
     setSelectedFiles(e.target.files); 
   };
@@ -336,18 +352,39 @@ function App() {
 
       <main className="main-content">
         
-        {/* [THÊM MỚI] BANNER CẢNH BÁO NGỦ ĐÔNG HIỂN THỊ NỔI BẬT */}
+        {/* [THÊM MỚI] BANNER CẢNH BÁO NGỦ ĐÔNG CÓ NÚT ÉP THỨC DẬY */}
         {sysStatus.isHibernating && sysStatus.stats && (
           <div style={{ background: '#fff3cd', color: '#856404', border: '1px solid #ffeeba', padding: '15px 20px', borderRadius: '8px', marginBottom: '25px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-            <h3 style={{ margin: '0 0 10px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              🛑 Hệ Thống Đang Ngủ Đông (Circuit Breaker)
-            </h3>
-            <p style={{ margin: '5px 0' }}>Hệ thống đã nhận diện 10 tài liệu lỗi nghiêm trọng liên tiếp (Có thể do cạn kiệt API Quota). Đang tạm dừng xử lý để tránh bị khóa API.</p>
-            <ul style={{ margin: '10px 0 0 0', paddingLeft: '20px' }}>
-              <li><strong>Bắt đầu ngủ lúc:</strong> {new Date(sysStatus.stats.startTime).toLocaleTimeString('vi-VN')}</li>
-              <li><strong>Dự kiến thức dậy tự động:</strong> {sysStatus.stats.wakeupTime} ({sysStatus.stats.sleepHours} tiếng)</li>
-              <li><strong>Số lần đã đánh thức nhưng vẫn thất bại:</strong> {sysStatus.stats.hibernationCount - 1} lần</li>
-            </ul>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '15px' }}>
+              <div>
+                <h3 style={{ margin: '0 0 10px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  🛑 Hệ Thống Đang Ngủ Đông (Circuit Breaker)
+                </h3>
+                <p style={{ margin: '5px 0' }}>Hệ thống đã nhận diện 10 tài liệu lỗi nghiêm trọng liên tiếp (Có thể do cạn kiệt API Quota). Đang tạm dừng xử lý để tránh bị khóa API.</p>
+                <ul style={{ margin: '10px 0 0 0', paddingLeft: '20px' }}>
+                  <li><strong>Bắt đầu ngủ lúc:</strong> {new Date(sysStatus.stats.startTime).toLocaleTimeString('vi-VN')}</li>
+                  <li><strong>Dự kiến thức dậy tự động:</strong> {sysStatus.stats.wakeupTime} ({sysStatus.stats.sleepHours} tiếng)</li>
+                  <li><strong>Số lần đã đánh thức nhưng vẫn thất bại:</strong> {sysStatus.stats.hibernationCount - 1} lần</li>
+                </ul>
+              </div>
+              
+              {/* Nút bấm gọi API */}
+              <button 
+                onClick={handleForceWakeUp}
+                style={{ 
+                  background: '#dc3545', 
+                  color: 'white', 
+                  border: 'none', 
+                  padding: '10px 20px', 
+                  borderRadius: '6px', 
+                  cursor: 'pointer', 
+                  fontWeight: 'bold',
+                  boxShadow: '0 2px 4px rgba(220,53,69,0.3)'
+                }}
+              >
+                ⚡ Ép Thức Dậy Ngay
+              </button>
+            </div>
           </div>
         )}
 
