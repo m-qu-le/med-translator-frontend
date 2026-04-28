@@ -3,7 +3,7 @@ import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import './App.css';
 
-// [THÊM MỚI] Khai báo URL gốc. Khi lên Cloud, chỉ cần đổi dòng này thành Domain thực tế.
+// Khai báo URL gốc. Khi lên Cloud, chỉ cần đổi dòng này thành Domain thực tế.
 const API_BASE_URL = 'https://med-translator-backend.onrender.com/api/translate';
 
 // -------------------------------------------------------------
@@ -110,26 +110,33 @@ const JobCard = ({ job, onDelete }) => {
 // -------------------------------------------------------------
 function App() {
   const [selectedFiles, setSelectedFiles] = useState(null);
-  const [folderName, setFolderName] = useState(''); // [THÊM MỚI] State lưu tên thư mục
+  const [folderName, setFolderName] = useState(''); 
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(null); // [THÊM MỚI] Hiển thị tiến độ tải lên
+  const [uploadProgress, setUploadProgress] = useState(null); 
   const [jobs, setJobs] = useState([]); 
+  
+  // [THÊM MỚI] State lưu trạng thái Ngủ đông của Backend
+  const [sysStatus, setSysStatus] = useState({ isHibernating: false, stats: null });
 
-  // 1. Phục hồi trạng thái khi F5
+  // 1. Phục hồi trạng thái khi F5 (Bao gồm cả trạng thái Hệ thống và Jobs)
   useEffect(() => {
-    const fetchExistingJobs = async () => {
+    const fetchInitialData = async () => {
       try {
-        const res = await axios.get(`${API_BASE_URL}/jobs`);
-        const formattedJobs = res.data.map(j => ({ ...j, logs: [], result: null }));
+        // Lấy trạng thái hệ thống
+        const statusRes = await axios.get(`${API_BASE_URL}/status`);
+        setSysStatus(statusRes.data);
+
+        // Lấy danh sách Jobs
+        const jobsRes = await axios.get(`${API_BASE_URL}/jobs`);
+        const formattedJobs = jobsRes.data.map(j => ({ ...j, logs: [], result: null }));
         setJobs(formattedJobs);
       } catch (error) {
-        console.error("Không thể lấy danh sách hàng đợi:", error);
+        console.error("Lỗi khởi tạo dữ liệu:", error);
       }
     };
-    fetchExistingJobs();
+    fetchInitialData();
   }, []);
 
-  // 2. Kéo kết quả Markdown khi một job báo 'completed' nhưng chưa có result
   useEffect(() => {
     const fetchMissingResults = async () => {
       jobs.forEach(async (job) => {
@@ -155,18 +162,18 @@ function App() {
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);
 
-      if (data.type === 'status') {
+      // [THÊM MỚI] Lắng nghe sự kiện hệ thống ngủ đông / thức dậy
+      if (data.type === 'systemStatus') {
+        setSysStatus(data.data);
+      }
+      else if (data.type === 'status') {
         setJobs(prevJobs => prevJobs.map(job => 
-          job.jobId === data.jobId 
-            ? { ...job, status: data.status, error: data.error } 
-            : job
+          job.jobId === data.jobId ? { ...job, status: data.status, error: data.error } : job
         ));
       } 
       else if (data.type === 'log') {
         setJobs(prevJobs => prevJobs.map(job => 
-          job.jobId === data.jobId 
-            ? { ...job, logs: [...(job.logs || []), data.msg] } 
-            : job
+          job.jobId === data.jobId ? { ...job, logs: [...(job.logs || []), data.msg] } : job
         ));
       }
     };
@@ -186,17 +193,40 @@ function App() {
     }
   };
 
-  const handleFileChange = (e) => {
-    setSelectedFiles(e.target.files); // Không giới hạn 100 file nữa
+  const handleBulkDeleteFolder = async (targetFolderName, folderJobs) => {
+    const jobsToDelete = folderJobs.filter(job => job.status === 'completed' || job.status === 'failed');
+    
+    if (jobsToDelete.length === 0) {
+      alert('Không có tài liệu nào hoàn thành hoặc lỗi để dọn dẹp.');
+      return;
+    }
+
+    const isConfirm = window.confirm(`Bạn có chắc chắn muốn XÓA GỌN ${jobsToDelete.length} tiến trình (đã xong/lỗi) khỏi thư mục [${targetFolderName}]?`);
+    if (!isConfirm) return;
+
+    const jobIds = jobsToDelete.map(job => job.jobId);
+
+    try {
+      // Gửi 1 Request duy nhất lên API mới
+      await axios.post(`${API_BASE_URL}/bulk-delete`, { jobIds });
+      
+      // Dọn dẹp State UI nội bộ
+      setJobs(prevJobs => prevJobs.filter(job => !jobIds.includes(job.jobId)));
+    } catch (error) {
+      alert('Lỗi khi dọn dẹp hàng loạt: ' + (error.response?.data?.error || error.message));
+    }
   };
 
-  // [THUẬT TOÁN MỚI] Gửi file theo Batch (Chia nhỏ để chống treo Server)
+  const handleFileChange = (e) => {
+    setSelectedFiles(e.target.files); 
+  };
+
   const handleUpload = async () => {
     if (!selectedFiles || selectedFiles.length === 0) return;
 
     const filesArray = Array.from(selectedFiles);
     const totalFiles = filesArray.length;
-    const CHUNK_SIZE = 10; // Gửi tối đa 10 file một lần
+    const CHUNK_SIZE = 10; 
     const targetFolder = folderName.trim() || 'Mặc định';
 
     setIsUploading(true);
@@ -239,7 +269,6 @@ function App() {
     return name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').replace(/[\s\t\n]+/g, '_').replace(/^\.+|\.+$/g, ''); 
   };
 
-  // [SỬA ĐỔI] Chỉ tải xuống các file hoàn thành TRONG THƯ MỤC được chọn
   const handleDownloadFolder = async (targetFolderName, folderJobs) => {
     const completedJobs = folderJobs.filter(job => job.status === 'completed' && job.result);
 
@@ -279,7 +308,6 @@ function App() {
     }
   };  
 
-  // [THÊM MỚI] Thuật toán nhóm các Job lại theo tên Thư mục
   const groupedJobs = jobs.reduce((acc, job) => {
     const folder = job.folderName || 'Mặc định';
     if (!acc[folder]) acc[folder] = [];
@@ -295,11 +323,27 @@ function App() {
       </header>
 
       <main className="main-content">
+        
+        {/* [THÊM MỚI] BANNER CẢNH BÁO NGỦ ĐÔNG HIỂN THỊ NỔI BẬT */}
+        {sysStatus.isHibernating && sysStatus.stats && (
+          <div style={{ background: '#fff3cd', color: '#856404', border: '1px solid #ffeeba', padding: '15px 20px', borderRadius: '8px', marginBottom: '25px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+            <h3 style={{ margin: '0 0 10px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              🛑 Hệ Thống Đang Ngủ Đông (Circuit Breaker)
+            </h3>
+            <p style={{ margin: '5px 0' }}>Hệ thống đã nhận diện 10 tài liệu lỗi nghiêm trọng liên tiếp (Có thể do cạn kiệt API Quota). Đang tạm dừng xử lý để tránh bị khóa API.</p>
+            <ul style={{ margin: '10px 0 0 0', paddingLeft: '20px' }}>
+              <li><strong>Bắt đầu ngủ lúc:</strong> {new Date(sysStatus.stats.startTime).toLocaleTimeString('vi-VN')}</li>
+              <li><strong>Dự kiến thức dậy tự động:</strong> {sysStatus.stats.wakeupTime} ({sysStatus.stats.sleepHours} tiếng)</li>
+              <li><strong>Số lần đã đánh thức nhưng vẫn thất bại:</strong> {sysStatus.stats.hibernationCount - 1} lần</li>
+            </ul>
+          </div>
+        )}
+
         <div className="upload-section" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
             <input 
               type="text" 
-              placeholder="Tên thư mục (Vd: Module Nội tiết)" 
+              placeholder="Tên thư mục (Vd: USMLE Step 1)" 
               value={folderName}
               onChange={(e) => setFolderName(e.target.value)}
               style={{ padding: '10px', borderRadius: '5px', border: '1px solid #ccc', flex: 1 }}
@@ -329,15 +373,23 @@ function App() {
         <div className="jobs-container">
           {Object.entries(groupedJobs).map(([folderName, folderJobs]) => (
             <div key={folderName} className="folder-group" style={{ marginBottom: '40px', border: '1px solid #e0e0e0', borderRadius: '8px', padding: '15px', background: '#fcfcfc' }}>
-              <div className="queue-header-actions" style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '2px solid #007bff', paddingBottom: '10px', marginBottom: '20px' }}>
+              <div className="queue-header-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #007bff', paddingBottom: '10px', marginBottom: '20px' }}>
                 <h3 className="queue-title" style={{ color: '#007bff', margin: 0 }}>
-                  📁 Thư mục: {folderName} ({folderJobs.length} files)
+                  📁 {folderName} ({folderJobs.length} files)
                 </h3>
-                {folderJobs.some(j => j.status === 'completed' && j.result) && (
-                  <button onClick={() => handleDownloadFolder(folderName, folderJobs)} className="download-all-btn" style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '5px', cursor: 'pointer' }}>
-                    📥 Tải các file đã xong
-                  </button>
-                )}
+                
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  {folderJobs.some(j => j.status === 'completed' && j.result) && (
+                    <button onClick={() => handleDownloadFolder(folderName, folderJobs)} className="download-all-btn" style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '5px', cursor: 'pointer' }}>
+                      📥 Tải các file đã xong
+                    </button>
+                  )}
+                  {folderJobs.some(j => j.status === 'completed' || j.status === 'failed') && (
+                    <button onClick={() => handleBulkDeleteFolder(folderName, folderJobs)} className="cleanup-btn" style={{ background: '#dc3545', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '5px', cursor: 'pointer' }}>
+                      🧹 Dọn dẹp
+                    </button>
+                  )}
+                </div>
               </div>
               
               <div className="masonry-grid-fallback">
