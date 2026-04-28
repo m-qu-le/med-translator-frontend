@@ -375,3 +375,12 @@ body {
     align-items: flex-start;
   }
 }
+
+.queue-header-actions:hover h3 {
+  opacity: 0.8;
+}
+
+.cleanup-btn:hover {
+  opacity: 0.9;
+  transform: scale(0.98);
+}
