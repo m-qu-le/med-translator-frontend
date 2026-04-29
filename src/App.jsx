@@ -135,7 +135,7 @@ function App() {
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);
 
-      // [THÊM MỚI] Lắng nghe sự kiện hệ thống ngủ đông / thức dậy
+      // Lắng nghe sự kiện hệ thống ngủ đông / thức dậy
       if (data.type === 'systemStatus') {
         setSysStatus(data.data);
       }
@@ -217,7 +217,7 @@ function App() {
     processQueue();
   }, [localQueue, isProcessingQueue]);
 
-  // HÀM MỚI: Thêm thao tác của người dùng vào Local Queue
+  // Thêm thao tác của người dùng vào Local Queue
   const handleAddToQueue = () => {
     if (!selectedFiles || selectedFiles.length === 0) return;
 
@@ -341,16 +341,15 @@ function App() {
 
       <main className="main-content">
         
-        {/* [THÊM MỚI] BANNER CẢNH BÁO NGỦ ĐÔNG HIỂN THỊ NỔI BẬT */}
+        {/* BANNER CẢNH BÁO NGỦ ĐÔNG HIỂN THỊ NỔI BẬT */}
         {sysStatus.isHibernating && sysStatus.stats && (
-          <div style={{ background: '#fff3cd', color: '#856404', border: '1px solid #ffeeba', padding: '15px 20px', borderRadius: '8px', marginBottom: '25px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-            <h3 style={{ margin: '0 0 10px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              🛑 Hệ Thống Đang Ngủ Đông (Circuit Breaker)
-            </h3>
-            <p style={{ margin: '5px 0' }}>Hệ thống đã nhận diện 10 tài liệu lỗi nghiêm trọng liên tiếp (Có thể do cạn kiệt API Quota). Đang tạm dừng xử lý để tránh bị khóa API.</p>
-            <ul style={{ margin: '10px 0 0 0', paddingLeft: '20px' }}>
+          <div className="hibernation-banner">
+            <h3>🛑 Hệ Thống Đang Ngủ Đông (Circuit Breaker)</h3>
+            <p>Hệ thống tạm dừng xử lý để bảo vệ API Quota.</p>
+            <ul>
               <li><strong>Bắt đầu ngủ lúc:</strong> {new Date(sysStatus.stats.startTime).toLocaleTimeString('vi-VN')}</li>
-              <li><strong>Dự kiến thức dậy tự động:</strong> {sysStatus.stats.wakeupTime} ({sysStatus.stats.sleepHours} tiếng)</li>
+              {/* HIỂN THỊ ĐÚNG MÚI GIỜ VIỆT NAM */}
+              <li><strong>Dự kiến thức dậy tự động:</strong> {new Date(sysStatus.stats.wakeupTime).toLocaleTimeString('vi-VN')} ({sysStatus.stats.sleepHours} tiếng)</li>
               <li><strong>Số lần đã đánh thức nhưng vẫn thất bại:</strong> {sysStatus.stats.hibernationCount - 1} lần</li>
             </ul>
           </div>
