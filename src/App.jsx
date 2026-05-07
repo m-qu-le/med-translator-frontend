@@ -278,6 +278,19 @@ function App() {
     }
   };
 
+  const handleForceWakeUp = async () => {
+    const isConfirm = window.confirm('Bạn có chắc chắn muốn ép hệ thống thức dậy ngay lập tức không?');
+    if (!isConfirm) return;
+
+    try {
+      await axios.post(`${API_BASE_URL}/force-wakeup`);
+      alert('🚀 Lệnh đánh thức đã được gửi thành công!');
+      // State sysStatus sẽ tự động được cập nhật thông qua luồng SSE
+    } catch (error) {
+      alert('Lỗi: ' + (error.response?.data?.message || error.message));
+    }
+  };
+
   const handleFileChange = (e) => {
     setSelectedFiles(e.target.files); 
   };
@@ -352,6 +365,23 @@ function App() {
               <li><strong>Dự kiến thức dậy tự động:</strong> {new Date(sysStatus.stats.wakeupTime).toLocaleTimeString('vi-VN')} ({sysStatus.stats.sleepHours} tiếng)</li>
               <li><strong>Số lần đã đánh thức nhưng vẫn thất bại:</strong> {sysStatus.stats.hibernationCount - 1} lần</li>
             </ul>
+
+            {/* NÚT FORCE WAKE UP */}
+            <button 
+              onClick={handleForceWakeUp}
+              style={{
+                marginTop: '15px',
+                padding: '8px 16px',
+                backgroundColor: '#ffc107',
+                color: '#000',
+                border: 'none',
+                borderRadius: '4px',
+                fontWeight: 'bold',
+                cursor: 'pointer'
+              }}
+            >
+              ⚡ Ép hệ thống thức dậy ngay
+            </button>
           </div>
         )}
 
