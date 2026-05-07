@@ -3,8 +3,8 @@ import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import './App.css';
 
-// Khai báo URL gốc. Khi lên Cloud, chỉ cần đổi dòng này thành Domain thực tế.
-const API_BASE_URL = 'https://med-translator-backend.onrender.com/api/translate';
+// Ưu tiên đọc từ biến môi trường của Vercel/Vite, nếu không có sẽ tự động dùng máy chủ US làm dự phòng (Fallback)
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://med-translator-backend-us.onrender.com/api/translate';
 
 // -------------------------------------------------------------
 // COMPONENT CON: JOB CARD (Quản lý hiển thị cho từng file)
