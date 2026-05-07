@@ -278,6 +278,22 @@ function App() {
     }
   };
 
+  // [THÊM MỚI] Khối logic xóa toàn bộ thư mục
+  const handleDeleteEntireFolder = async (targetFolderName) => {
+    const isConfirm = window.confirm(`🧨 CẢNH BÁO: Bạn có chắc chắn muốn XÓA GỐC toàn bộ thư mục [${targetFolderName}] không?\n\nHành động này sẽ hủy tất cả các file đang chờ dịch và dọn sạch dữ liệu.`);
+    if (!isConfirm) return;
+
+    try {
+      // Dùng encodeURIComponent để an toàn với tên thư mục chứa dấu cách/kí tự đặc biệt
+      await axios.delete(`${API_BASE_URL}/folder/${encodeURIComponent(targetFolderName)}`);
+      
+      // Lọc bỏ toàn bộ job thuộc thư mục này ra khỏi State để UI cập nhật ngay lập tức
+      setJobs(prevJobs => prevJobs.filter(job => (job.folderName || 'Mặc định') !== targetFolderName));
+    } catch (error) {
+      alert('Lỗi khi xóa toàn bộ thư mục: ' + (error.response?.data?.error || error.message));
+    }
+  };
+
   const handleForceWakeUp = async () => {
     const isConfirm = window.confirm('Bạn có chắc chắn muốn ép hệ thống thức dậy ngay lập tức không?');
     if (!isConfirm) return;
@@ -455,6 +471,15 @@ function App() {
                       🧹 Dọn dẹp
                     </button>
                   )}
+                  
+                  {/* [THÊM MỚI] Nút xóa triệt để toàn bộ thư mục */}
+                  <button 
+                    onClick={() => handleDeleteEntireFolder(folderName)} 
+                    className="delete-folder-btn" 
+                    style={{ background: '#850000', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}
+                  >
+                    🧨 Xóa toàn bộ hàng đợi
+                  </button>
                 </div>
               </div>
               
