@@ -319,11 +319,23 @@ function App() {
   };
 
   const sanitizeFileName = (name) => {
-    return name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').replace(/[\s\t\n]+/g, '_').replace(/^\.+|\.+$/g, ''); 
+    // 1. Loại bỏ triệt để các chuỗi Mojibake phổ biến (như dấu nháy đơn lỗi) và ký tự thay thế Unicode
+    let cleanName = name.replace(/â|â€™/g, '');
+    
+    // 2. Loại bỏ các ký tự cấm của Windows
+    cleanName = cleanName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '');
+    
+    // 3. BỘ LỌC CỨNG: Chỉ giữ lại chữ cái (\p{L} - bao gồm tiếng Việt), số (\p{N}), khoảng trắng, gạch ngang, gạch dưới, ngoặc đơn
+    cleanName = cleanName.replace(/[^\p{L}\p{N}\s\-_()]/gu, ''); 
+    
+    // 4. Chuẩn hóa khoảng trắng dư thừa thành dấu gạch dưới
+    cleanName = cleanName.replace(/[\s\t\n]+/g, '_');
+    
+    // 5. Cắt bỏ dấu gạch dưới hoặc dấu chấm thừa ở 2 đầu tên file
+    return cleanName.replace(/^[_.]+|[_.]+$/g, ''); 
   };
 
   const handleDownloadFolder = async (targetFolderName, folderJobs) => {
-    // Chỉ lọc các job completed, KHÔNG xét job.result vì nó không còn nằm trong State tổng
     const completedJobs = folderJobs.filter(job => job.status === 'completed');
 
     if (completedJobs.length === 0) {
@@ -339,10 +351,10 @@ function App() {
     try {
       const directoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
       let successCount = 0;
+      let failedFiles = []; // [THÊM MỚI] Mảng theo dõi đích danh các file bị từ chối I/O
 
       for (const [index, job] of completedJobs.entries()) {
         try {
-          // GỌI API ĐỂ LẤY NỘI DUNG NGAY LÚC GHI FILE
           const resultRes = await axios.get(`${API_BASE_URL}/jobs/${job.jobId}/result`);
           const markdownContent = resultRes.data.result;
 
@@ -350,8 +362,12 @@ function App() {
 
           let rawName = job.originalName || job.fileName || `TaiLieu_${index + 1}`;
           const baseName = rawName.replace(/\.[^/.]+$/, "");
+          
+          // Đưa qua màng lọc an toàn tuyệt đối
           const cleanName = sanitizeFileName(baseName);
-          const finalFileName = `${cleanName || `Doc_${index}`}_vi.md`;
+          
+          // Fallback: Lỡ tên file toàn ký tự rác bị lọc sạch trơn, thì dùng jobId thay thế
+          const finalFileName = `${cleanName || `Doc_${job.jobId}`}_vi.md`;
 
           const fileHandle = await directoryHandle.getFileHandle(finalFileName, { create: true });
           const writable = await fileHandle.createWritable();
@@ -360,9 +376,22 @@ function App() {
           successCount++;
         } catch (fileError) {
           console.error(`Lỗi khi tải hoặc ghi file ${job.originalName}:`, fileError);
+          // [THÊM MỚI] Đẩy tên file gốc bị lỗi vào mảng để báo cáo cho User
+          failedFiles.push(job.originalName || job.fileName); 
         }
       }
-      alert(`✅ Đã lưu ${successCount}/${completedJobs.length} tài liệu của thư mục [${targetFolderName}]!`);
+      
+      // [THÊM MỚI] Hiển thị báo cáo chi tiết
+      if (failedFiles.length > 0) {
+        alert(
+          `✅ Đã lưu ${successCount}/${completedJobs.length} tài liệu.\n` + 
+          `❌ Tải thất bại ${failedFiles.length} file:\n\n` + 
+          failedFiles.map(f => `- ${f}`).join('\n') + 
+          `\n\nVui lòng nhấn "Copy Markdown" thủ công cho các file bị lỗi tên này.`
+        );
+      } else {
+        alert(`✅ Đã lưu thành công toàn bộ ${successCount}/${completedJobs.length} tài liệu của thư mục [${targetFolderName}]!`);
+      }
     } catch (error) {
       if (error.name !== 'AbortError') console.error('❌ Lỗi System I/O:', error);
     }
