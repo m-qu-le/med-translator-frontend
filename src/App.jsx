@@ -12,16 +12,44 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://med-translato
 const JobCard = ({ job, onDelete }) => {
   const [isCopied, setIsCopied] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  
+  // State quản lý kết quả cục bộ
+  const [localResult, setLocalResult] = useState(null);
+  const [isLoadingContent, setIsLoadingContent] = useState(false);
+
+  // Hàm Lazy Fetch nội dung
+  const fetchResultOnDemand = async () => {
+    if (localResult) return localResult; // Đã tải rồi thì dùng luôn trong cache
+    setIsLoadingContent(true);
+    try {
+      const res = await axios.get(`${API_BASE_URL}/jobs/${job.jobId}/result`);
+      setLocalResult(res.data.result);
+      return res.data.result;
+    } catch (err) {
+      alert('Lỗi tải nội dung từ Server!');
+      return null;
+    } finally {
+      setIsLoadingContent(false);
+    }
+  };
 
   const handleCopy = async () => {
-    if (!job.result) return;
+    const content = await fetchResultOnDemand();
+    if (!content) return;
     try {
-      await navigator.clipboard.writeText(job.result);
+      await navigator.clipboard.writeText(content);
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2000);
     } catch (err) {
       alert('Không thể copy nội dung!');
     }
+  };
+
+  const handleTogglePreview = async () => {
+    if (!showPreview) {
+      await fetchResultOnDemand();
+    }
+    setShowPreview(!showPreview);
   };
 
   return (
@@ -40,16 +68,15 @@ const JobCard = ({ job, onDelete }) => {
         <div className="job-actions">
           {job.status === 'completed' && (
             <>
-              <button className="preview-btn" onClick={() => setShowPreview(!showPreview)}>
-                {showPreview ? 'Đóng xem trước' : '👁️ Xem trước'}
+              <button className="preview-btn" onClick={handleTogglePreview} disabled={isLoadingContent}>
+                {isLoadingContent ? '⏳ Đang tải...' : (showPreview ? 'Đóng xem trước' : '👁️ Xem trước')}
               </button>
-              <button onClick={handleCopy} className={`copy-btn ${isCopied ? 'copied' : ''}`}>
+              <button onClick={handleCopy} className={`copy-btn ${isCopied ? 'copied' : ''}`} disabled={isLoadingContent}>
                 {isCopied ? '✅ Đã Copy' : '📋 Copy Markdown'}
               </button>
             </>
           )}
           
-          {/* Nút Xóa xuất hiện ở cả job lỗi và job đã hoàn thành */}
           {(job.status === 'failed' || job.status === 'completed') && (
             <button 
               onClick={() => onDelete(job.jobId)} 
@@ -62,15 +89,13 @@ const JobCard = ({ job, onDelete }) => {
         </div>
       </div>
 
-      {/* HIỂN THỊ LỖI */}
       {job.status === 'failed' && (
         <div className="job-error">Chi tiết lỗi: {job.error}</div>
       )}
 
-      {/* HIỂN THỊ KẾT QUẢ MARKDOWN */}
-      {job.status === 'completed' && showPreview && job.result && (
+      {job.status === 'completed' && showPreview && localResult && (
         <div className="markdown-preview mt-15">
-          <ReactMarkdown>{job.result}</ReactMarkdown>
+          <ReactMarkdown>{localResult}</ReactMarkdown>
         </div>
       )}
     </div>
@@ -109,24 +134,6 @@ function App() {
     };
     fetchInitialData();
   }, []);
-
-  useEffect(() => {
-    const fetchMissingResults = async () => {
-      jobs.forEach(async (job) => {
-        if (job.status === 'completed' && !job.result) {
-          try {
-            const res = await axios.get(`${API_BASE_URL}/jobs/${job.jobId}/result`);
-            setJobs(prevJobs => prevJobs.map(j => 
-              j.jobId === job.jobId ? { ...j, result: res.data.result } : j
-            ));
-          } catch (err) {
-            console.error(`Lỗi kéo kết quả file ${job.originalName}:`, err);
-          }
-        }
-      });
-    };
-    fetchMissingResults();
-  }, [jobs]);
 
   // 3. Lắng nghe SSE thời gian thực từ Backend
   useEffect(() => {
@@ -278,7 +285,7 @@ function App() {
     }
   };
 
-  // [THÊM MỚI] Khối logic xóa toàn bộ thư mục
+  // Khối logic xóa toàn bộ thư mục
   const handleDeleteEntireFolder = async (targetFolderName) => {
     const isConfirm = window.confirm(`🧨 CẢNH BÁO: Bạn có chắc chắn muốn XÓA GỐC toàn bộ thư mục [${targetFolderName}] không?\n\nHành động này sẽ hủy tất cả các file đang chờ dịch và dọn sạch dữ liệu.`);
     if (!isConfirm) return;
@@ -316,7 +323,8 @@ function App() {
   };
 
   const handleDownloadFolder = async (targetFolderName, folderJobs) => {
-    const completedJobs = folderJobs.filter(job => job.status === 'completed' && job.result);
+    // Chỉ lọc các job completed, KHÔNG xét job.result vì nó không còn nằm trong State tổng
+    const completedJobs = folderJobs.filter(job => job.status === 'completed');
 
     if (completedJobs.length === 0) {
       alert('Thư mục này chưa có tài liệu nào hoàn thành!');
@@ -334,6 +342,12 @@ function App() {
 
       for (const [index, job] of completedJobs.entries()) {
         try {
+          // GỌI API ĐỂ LẤY NỘI DUNG NGAY LÚC GHI FILE
+          const resultRes = await axios.get(`${API_BASE_URL}/jobs/${job.jobId}/result`);
+          const markdownContent = resultRes.data.result;
+
+          if (!markdownContent) continue;
+
           let rawName = job.originalName || job.fileName || `TaiLieu_${index + 1}`;
           const baseName = rawName.replace(/\.[^/.]+$/, "");
           const cleanName = sanitizeFileName(baseName);
@@ -341,11 +355,11 @@ function App() {
 
           const fileHandle = await directoryHandle.getFileHandle(finalFileName, { create: true });
           const writable = await fileHandle.createWritable();
-          await writable.write(job.result);
+          await writable.write(markdownContent);
           await writable.close();
           successCount++;
         } catch (fileError) {
-          console.error(`Lỗi khi ghi file ${job.originalName}:`, fileError);
+          console.error(`Lỗi khi tải hoặc ghi file ${job.originalName}:`, fileError);
         }
       }
       alert(`✅ Đã lưu ${successCount}/${completedJobs.length} tài liệu của thư mục [${targetFolderName}]!`);
@@ -461,7 +475,8 @@ function App() {
                 </h3>
                 
                 <div style={{ display: 'flex', gap: '10px' }}>
-                  {folderJobs.some(j => j.status === 'completed' && j.result) && (
+                  {/* Đã chỉnh sửa điều kiện hiển thị nút tải: Xóa && j.result */}
+                  {folderJobs.some(j => j.status === 'completed') && (
                     <button onClick={() => handleDownloadFolder(folderName, folderJobs)} className="download-all-btn" style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '5px', cursor: 'pointer' }}>
                       📥 Tải các file đã xong
                     </button>
@@ -472,7 +487,6 @@ function App() {
                     </button>
                   )}
                   
-                  {/* [THÊM MỚI] Nút xóa triệt để toàn bộ thư mục */}
                   <button 
                     onClick={() => handleDeleteEntireFolder(folderName)} 
                     className="delete-folder-btn" 
