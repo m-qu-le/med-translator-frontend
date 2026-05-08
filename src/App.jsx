@@ -124,12 +124,19 @@ function App() {
         const statusRes = await axios.get(`${API_BASE_URL}/status`);
         setSysStatus(statusRes.data);
 
-        // Lấy danh sách Jobs
+      // Lấy danh sách Jobs
         const jobsRes = await axios.get(`${API_BASE_URL}/jobs`);
-        const formattedJobs = jobsRes.data.map(j => ({ ...j, logs: [], result: null }));
-        setJobs(formattedJobs);
+        
+        // Cầu chì bảo vệ: Chặn trường hợp Render trả về trang HTML 502 thay vì JSON
+        if (Array.isArray(jobsRes.data)) {
+            const formattedJobs = jobsRes.data.map(j => ({ ...j, logs: [], result: null }));
+            setJobs(formattedJobs);
+        } else {
+            throw new Error("Cloud Server trả về dữ liệu không hợp lệ.");
+        }
       } catch (error) {
         console.error("Lỗi khởi tạo dữ liệu:", error);
+        alert("⚠️ Không thể tải danh sách tài liệu từ Cloud. Máy chủ đang khởi động hoặc quá tải do phục hồi dữ liệu. Vui lòng nhấn F5 (Tải lại trang) sau 30 giây.");
       }
     };
     fetchInitialData();
